@@ -1,3 +1,4 @@
+//message.js
 import express from "express";
 import { poolPromise, sql } from "../db.js";
 import { authRequired } from "../middleware/auth.js";

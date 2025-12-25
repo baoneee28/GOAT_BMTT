@@ -1,3 +1,4 @@
+//auth.js
 import jwt from "jsonwebtoken";
 
 export function authRequired(req, res, next) {

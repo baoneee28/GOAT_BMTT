@@ -1,3 +1,4 @@
+//password.js
 import crypto from "crypto";
 
 export function genSalt(bytes = 16) {

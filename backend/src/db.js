@@ -1,3 +1,6 @@
+//db.js
+import dotenv from "dotenv";
+dotenv.config();
 import sql from "mssql";
 
 const config = {
@@ -18,6 +21,16 @@ const config = {
   connectionTimeout: 15000,
   requestTimeout: 15000,
 };
+
+console.log("DB CFG =", {
+  server: config.server,
+  port: config.port,
+  user: config.user,
+  password: config.password ? "***" : "(empty)",
+  database: config.database,
+  options: config.options,
+});
+
 
 export const poolPromise = new sql.ConnectionPool(config)
   .connect()
