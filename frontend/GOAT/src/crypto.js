@@ -135,20 +135,18 @@ export function clearUserKeys(username) {
 // =====================================================
 export function buildMessagePayload({
   conversationId,
-  senderId,
-  body,
   clientTimestamp,
-  nonce,
+  nonce, // base64
+  body,
 }) {
-  return new TextEncoder().encode(
-    JSON.stringify({
-      conversationId: Number(conversationId),
-      senderId: Number(senderId),
-      clientTimestamp: String(clientTimestamp),
-      nonce: String(nonce),
-      body: String(body),
-    })
-  );
+  // `${conversationId}|${clientTimestamp}|${nonceBase64}|${body}`
+  const cid = String(conversationId);
+  const ts = String(clientTimestamp);
+  const n = String(nonce);
+  const b = String(body);
+
+  const raw = `${cid}|${ts}|${n}|${b}`;
+  return new TextEncoder().encode(raw);
 }
 
 export async function sha256Bytes(bytes) {

@@ -2,23 +2,22 @@
 
 /**
  * Canonical payload MUST match frontend buildMessagePayload (crypto.js)
- * Output: Buffer of UTF-8 JSON string
+ * requested format: `${conversationId}|${clientTimestamp}|${nonceBase64}|${body}`
  */
 export function buildMessagePayload({
   conversationId,
-  senderId,
-  body,
   clientTimestamp,
-  nonce,
+  nonce, // this is nonceBase64
+  body,
 }) {
-  const payloadObj = {
-    conversationId: Number(conversationId),
-    senderId: Number(senderId),
-    clientTimestamp: clientTimestamp ? String(clientTimestamp) : "",
-    nonce: nonce ? String(nonce) : "",
-    body: String(body),
-  };
+  // Ensure strings
+  const cid = String(conversationId);
+  const ts = clientTimestamp ? String(clientTimestamp) : "";
+  const n = nonce ? String(nonce) : ""; // base64 string
+  const b = String(body);
 
-  const json = JSON.stringify(payloadObj);
-  return Buffer.from(json, "utf8");
+  // “conversationId|clientTimestamp|nonceBase64|body”
+  const raw = `${cid}|${ts}|${n}|${b}`;
+  
+  return Buffer.from(raw, "utf8");
 }

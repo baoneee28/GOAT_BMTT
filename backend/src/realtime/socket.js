@@ -1,7 +1,7 @@
-// src/realtime/socket.js
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { poolPromise, sql } from "../db.js";
-import { sha256, verifySignaturePSS } from "../services/signature.js";
+import { sha256 } from "../services/signature.js";
 import { buildMessagePayload } from "../services/messagePayload.js";
 
 /**
@@ -67,21 +67,25 @@ export function initSocket(io) {
     socket.on("message:send", async (msg, ack) => {
       try {
         const me = socket.user.id;
-        const { conversationId, body, clientTimestamp, signatureBase64, nonce } =
+        const { conversationId, body, clientTimestamp, signatureBase64, nonceBase64 } =
           msg || {};
 
         const convId = Number(conversationId);
-        if (!convId || typeof body !== "string" || !signatureBase64) {
-          return ack?.({ ok: false, error: "Invalid payload" });
+        // require nonceBase64
+        if (!convId || typeof body !== "string" || !signatureBase64 || !nonceBase64) {
+          return ack?.({ ok: false, error: "Invalid payload (missing nonce/sig)" });
         }
 
         // --- [SECURE FIX 1] Timestamp Validation (Window +/- 5 minutes) ---
+        const ts = new Date(clientTimestamp);
+        if (Number.isNaN(ts.getTime())) {
+          return ack?.({ ok: false, error: "Invalid clientTimestamp" });
+        }
+
         const now = Date.now();
-        const ct = clientTimestamp ? new Date(clientTimestamp) : null;
-        const ctTime = ct && !isNaN(ct.getTime()) ? ct.getTime() : 0;
-        
-        if (Math.abs(now - ctTime) > 5 * 60 * 1000) {
-           return ack?.({ ok: false, error: "Timestamp invalid or expired" });
+        const driftMs = Math.abs(now - ts.getTime());
+        if (driftMs > 5 * 60 * 1000) {
+          return ack?.({ ok: false, error: "Timestamp out of allowed window" });
         }
         // ------------------------------------------------------------------
 
@@ -115,36 +119,53 @@ export function initSocket(io) {
           .trim();
 
         // 3) Build canonical payload -> hash
+        // format: `${conversationId}|${clientTimestamp}|${nonceBase64}|${body}`
         const payload = buildMessagePayload({
           conversationId: convId,
-          senderId: me,
+          // senderId: me, // <-- NO senderId in signature as requested
           body,
           clientTimestamp,
-          nonce,
+          nonce: nonceBase64,
         });
 
         const hash = sha256(payload); // Buffer(32)
 
-        // --- [SECURE FIX 2] Replay Protection (Check if Hash exists) ---
-        // Nếu hash này đã có trong DB => Gói tin này đã được xử lý rồi -> Reject
+        // --- [SECURE FIX 2] Replay Protection (Nonce + Hash) ---
+        const nonceBuf = Buffer.from(nonceBase64, "base64");
+        if (nonceBuf.length !== 16) {
+          return ack?.({ ok: false, error: "Nonce must be 16 bytes" });
+        }
+
+        // Check if Nonce OR BodyHash exists
+        // (Dual protection: Hash checks content, Nonce checks randomness)
         const dupCheck = await pool
           .request()
           .input("BodyHash", sql.VarBinary(32), hash)
-          .query(`SELECT TOP 1 1 FROM dbo.Messages WHERE BodyHash=@BodyHash`);
-        
+          .input("Nonce", sql.VarBinary(16), nonceBuf)
+          .query(`
+            SELECT TOP 1 1 FROM dbo.Messages 
+            WHERE BodyHash=@BodyHash OR Nonce=@Nonce
+          `);
+
         if (dupCheck.recordset.length > 0) {
-            return ack?.({ ok: false, error: "Replay attack detected (Duplicate message)" });
+          return ack?.({ ok: false, error: "Replay attack detected (Duplicate message/nonce)" });
         }
         // ---------------------------------------------------------------
 
         // 4) Verify signature RSA-PSS (client ký trên HASH)
+        // [UPDATE] Verify directly on "dataToVerify" (payload) using crypto.verify("sha256", ...)
         const sig = Buffer.from(signatureBase64, "base64");
 
-        const ok = verifySignaturePSS({
-          publicKeyPem,
-          hashBuffer: hash,
-          signatureBuffer: sig,
-        });
+        const ok = crypto.verify(
+          "sha256",
+          payload, // Buffer from buildMessagePayload
+          {
+            key: publicKeyPem,
+            padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+            saltLength: 32,
+          },
+          sig
+        );
 
         if (!ok) return ack?.({ ok: false, error: "Signature verify failed" });
 
@@ -156,11 +177,12 @@ export function initSocket(io) {
           .input("Body", sql.NVarChar(sql.MAX), body)
           .input("BodyHash", sql.VarBinary(32), hash)
           .input("Signature", sql.VarBinary(sql.MAX), sig)
-          .input("ClientTimestamp", sql.DateTime2, ct)
+          .input("ClientTimestamp", sql.DateTime2, ts) // updated type
+          .input("Nonce", sql.VarBinary(16), nonceBuf)
           .query(`
-            INSERT INTO dbo.Messages(ConversationId, SenderId, Body, BodyHash, Signature, ClientTimestamp)
+            INSERT INTO dbo.Messages(ConversationId, SenderId, Body, BodyHash, Signature, ClientTimestamp, Nonce)
             OUTPUT INSERTED.Id, INSERTED.CreatedAt
-            VALUES (@ConversationId, @SenderId, @Body, @BodyHash, @Signature, @ClientTimestamp)
+            VALUES (@ConversationId, @SenderId, @Body, @BodyHash, @Signature, @ClientTimestamp, @Nonce)
           `);
 
         const inserted = saved.recordset[0];
@@ -171,7 +193,7 @@ export function initSocket(io) {
           senderId: me,
           body,
           clientTimestamp,
-          nonce: nonce ?? "",
+          nonce: nonceBase64,
           createdAt: inserted.CreatedAt,
           signatureBase64,
           bodyHashHex: hash.toString("hex"),

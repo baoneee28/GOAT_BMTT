@@ -6,13 +6,18 @@ import {
   buildMessagePayload,
   sha256Bytes,
   signHashRsaPss,
-  getUserPemFromLocalStorage 
+  getUserPemFromLocalStorage
 } from "./crypto";
 
-function randomNonceHex(bytes = 8) {
-  const arr = new Uint8Array(bytes);
-  crypto.getRandomValues(arr);
-  return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+function genNonceBase64() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  // base64
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 export default function App() {
@@ -200,19 +205,20 @@ export default function App() {
     try {
       const { privateKey } = await ensureClientKeyPair(me?.username);
 
-      const clientTimestamp = Date.now();
-      const nonce = randomNonceHex(8);
+      const clientTimestamp = new Date().toISOString();
+      // 16 bytes random -> base64
+      const nonce = genNonceBase64();
 
       const payloadBytes = buildMessagePayload({
         conversationId: activeConvId,
-        senderId: me.id,
         body: draft,
         clientTimestamp,
         nonce,
       });
 
-      const hash = await sha256Bytes(payloadBytes);
-      const signatureBase64 = await signHashRsaPss(privateKey, hash);
+      // [UPDATE] Sign directly on payloadBytes (crypto.subtle.sign will hash it)
+      // const hash = await sha256Bytes(payloadBytes); 
+      const signatureBase64 = await signHashRsaPss(privateKey, payloadBytes);
 
       s.emit(
         "message:send",
@@ -220,7 +226,7 @@ export default function App() {
           conversationId: activeConvId,
           body: draft,
           clientTimestamp,
-          nonce,
+          nonceBase64: nonce, // gửi lên server với key nonceBase64 cho rõ
           signatureBase64,
         },
         (ack) => {
@@ -276,7 +282,7 @@ export default function App() {
     if (!activeConvId) return;
     const uidStr = prompt("Enter User ID to add:");
     if (!uidStr) return;
-    
+
     const userId = Number(uidStr);
     if (!Number.isInteger(userId)) return alert("Invalid User ID");
 
@@ -424,18 +430,18 @@ export default function App() {
 
   // ADMIN VIEW
   if (mode === "admin") {
-  const { pub, priv } = getUserPemFromLocalStorage(me?.username);
+    const { pub, priv } = getUserPemFromLocalStorage(me?.username);
 
-  return (
-    <div
-      className="fade-in"
-      style={{
-        display: "grid",
-        gridTemplateColumns: "320px 1fr",
-        height: "100vh",
-        overflow: "hidden",
-      }}
-    >
+    return (
+      <div
+        className="fade-in"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "320px 1fr",
+          height: "100vh",
+          overflow: "hidden",
+        }}
+      >
 
         {/* Left panel */}
         <div
@@ -1007,7 +1013,7 @@ export default function App() {
           {activeConvId ? (
             <>
               <div style={{ fontWeight: 600 }}>Conversation #{activeConvId}</div>
-              <button 
+              <button
                 onClick={handleAddMember}
                 style={{
                   padding: "6px 12px",
