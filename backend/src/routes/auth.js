@@ -6,97 +6,225 @@ import { genSalt, hashPassword, safeEqual } from "../services/password.js";
 
 export const authRouter = express.Router();
 
+// ----------------------------------------------------------------------
+// IN-MEMORY OTP STORE (Demo only)
+// ----------------------------------------------------------------------
+const otpStore = new Map();
+
 /**
- * POST /api/auth/register
- * body: { username, password, publicKeyPem }
- *
- * Demo: trả về salt + iterations + passwordHashHex + publicKeyPem
+ * 0. POST /api/auth/register
+ * Body: { username, password }
+ * Logic: Create user if not exists.
  */
 authRouter.post("/register", async (req, res) => {
-  const { username, password, publicKeyPem } = req.body || {};
-  if (!username || !password || !publicKeyPem) {
-    return res
-      .status(400)
-      .json({ error: "username, password, publicKeyPem are required" });
-  }
-
-  const iterations = 150000;
-  const salt = genSalt(16); // Buffer
-  const pwdHash = hashPassword(password, salt, iterations); // Buffer(32)
+  let { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: "Username and Password required" });
+  username = username.trim();
 
   try {
     const pool = await poolPromise;
+    // Check exist
+    const check = await pool.request()
+        .input("Username", sql.NVarChar(50), username)
+        .query("SELECT Id FROM dbo.Users WHERE Username = @Username");
+    
+    if (check.recordset.length > 0) {
+        return res.status(409).json({ error: "Username already exists. Please Login." });
+    }
+
+    // Hash Password
+    const iterations = 150000;
+    const salt = genSalt(16);
+    const pwdHash = hashPassword(password, salt, iterations);
+
+    // Create User
     await pool
       .request()
       .input("Username", sql.NVarChar(50), username)
+      .input("PasswordHash", sql.VarBinary(32), pwdHash)
       .input("Salt", sql.VarBinary(32), salt)
       .input("Iterations", sql.Int, iterations)
-      .input("PasswordHash", sql.VarBinary(32), pwdHash)
-      .input("PublicKeyPem", sql.NVarChar(sql.MAX), publicKeyPem)
+      .input("EmptyPem", sql.NVarChar(sql.MAX), "")
       .query(`
-        INSERT INTO dbo.Users(Username, Salt, Iterations, PasswordHash, PublicKeyPem)
-        VALUES (@Username, @Salt, @Iterations, @PasswordHash, @PublicKeyPem)
+        INSERT INTO dbo.Users(Username, PasswordHash, Salt, Iterations, PublicKeyPem)
+        VALUES (@Username, @PasswordHash, @Salt, @Iterations, @EmptyPem)
       `);
 
-    // ✅ Demo return: show what was stored (hex)
-    return res.json({
-      ok: true,
-      username,
-      iterations,
-      saltHex: salt.toString("hex"),
-      passwordHashHex: pwdHash.toString("hex"),
-      publicKeyPem,
-      note:
-        "Demo only: do NOT return salts/hashes in real systems. Private key should stay on client.",
-    });
+    return res.json({ ok: true, message: "Registered! Please Login." });
   } catch (e) {
-    console.error("REGISTER ERROR:", e);
-
-    const msg = e?.originalError?.info?.message || e?.message || "unknown";
-    if (
-      msg.includes("UNIQUE") ||
-      msg.includes("duplicate") ||
-      msg.includes("2627") ||
-      msg.includes("2601")
-    ) {
-      return res.status(409).json({ error: "Username already exists" });
-    }
-
-    return res.status(500).json({ error: "Server error", detail: msg });
+    console.error("Register Error:", e);
+    return res.status(500).json({ error: e.message });
   }
 });
 
 /**
- * POST /api/auth/login
- * body: { username, password }
+ * 1. POST /api/auth/otp/request
+ * Body: { username, password }
+ * Logic: Checks user exists, VERIFY PASSWORD, gen OTP.
  */
-authRouter.post("/login", async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password)
-    return res.status(400).json({ error: "username, password required" });
+authRouter.post("/otp/request", async (req, res) => {
+  let { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: "Username and Password required" });
+  
+  username = username.trim();
 
-  const pool = await poolPromise;
-  const r = await pool
-    .request()
-    .input("Username", sql.NVarChar(50), username)
-    .query(
-      `SELECT TOP 1 Id, Username, Salt, Iterations, PasswordHash FROM dbo.Users WHERE Username=@Username`
-    );
+  try {
+    const pool = await poolPromise;
+    // Get User & Credentials
+    let userRes = await pool
+      .request()
+      .input("Username", sql.NVarChar(50), username)
+      .query("SELECT Id, PasswordHash, Salt, Iterations FROM dbo.Users WHERE Username = @Username");
 
-  if (r.recordset.length === 0)
-    return res.status(401).json({ error: "Invalid credentials" });
+    if (userRes.recordset.length === 0) {
+        return res.status(404).json({ error: "Account not found." });
+    }
 
-  const u = r.recordset[0];
-  const salt = Buffer.from(u.Salt);
-  const storedHash = Buffer.from(u.PasswordHash);
-  const iterations = u.Iterations;
+    const u = userRes.recordset[0];
+    
+    // Verify Password
+    const salt = Buffer.from(u.Salt);
+    const storedHash = Buffer.from(u.PasswordHash);
+    const iterations = u.Iterations;
+    
+    // If user was created with dummy password (previous demo users), this might fail or pass depending on implementation.
+    // Ideally we should have reset them. But for now, standard check:
+    const testHash = hashPassword(password, salt, iterations);
+    if (!safeEqual(testHash, storedHash)) {
+         return res.status(401).json({ error: "Incorrect password" });
+    }
 
-  const testHash = hashPassword(password, salt, iterations);
-  if (!safeEqual(testHash, storedHash))
-    return res.status(401).json({ error: "Invalid credentials" });
+    // Generate OTP
+    const otp = "123456"; // Fixed for Demo
+    
+    otpStore.set(username, {
+      otp,
+      expires: Date.now() + 5 * 60 * 1000, // 5 mins
+    });
 
-  const token = jwt.sign({ id: u.Id, username: u.Username }, process.env.JWT_SECRET, {
-    expiresIn: "2h",
+    console.log(`[OTP] Generated for ${username}: ${otp}`);
+    return res.json({ ok: true, message: "Password OK. OTP sent.", demoOtp: otp });
+  } catch (e) {
+    console.error("OTP Request Error:", e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * 2. POST /api/auth/otp/verify
+ * Body: { username, otp }
+ * Logic: Validate OTP. Return "Enroll Token".
+ * Enroll Token is a short-lived JWT allowing access to /enroll-device only.
+ */
+authRouter.post("/otp/verify", async (req, res) => {
+  let { username, otp } = req.body || {};
+  if (!username || !otp) return res.status(400).json({ error: "Missing info" });
+  
+  username = username.trim(); // Normalize
+
+  const stored = otpStore.get(username);
+  
+  // Debug log
+  if (!stored) {
+    console.log(`[OTP-FAIL] No OTP found for '${username}'. Store keys:`, [...otpStore.keys()]);
+    return res.status(400).json({ error: "No OTP request found (Client may have timed out or Server restarted)" });
+  }
+
+  if (Date.now() > stored.expires) return res.status(400).json({ error: "OTP expired" });
+  if (stored.otp !== otp) return res.status(400).json({ error: "Invalid OTP" });
+
+  // OTP OK
+  otpStore.delete(username); // One-time use
+
+  // Issue "Enrollment Token" (valid 5 mins)
+  const enrollToken = jwt.sign({ username, type: "provisional" }, process.env.JWT_SECRET, {
+    expiresIn: "5m",
   });
-  return res.json({ token, user: { id: u.Id, username: u.Username } });
+
+  return res.json({ ok: true, enrollToken });
+});
+
+/**
+ * 3. POST /api/auth/enroll-device
+ * Headers: Authorization: Bearer <enrollToken>
+ * Body: { deviceId, publicKeyPem }
+ * Logic: 
+ *   - Find User by username (from token)
+ *   - Insert/Update UserDevices
+ *   - Return long-lived Access Token (Login)
+ */
+authRouter.post("/enroll-device", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+
+  if (!token) return res.status(401).json({ error: "Missing enroll token" });
+
+  let payload;
+  try {
+    payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (payload.type !== "provisional") throw new Error("Invalid token type");
+  } catch (e) {
+    return res.status(403).json({ error: "Invalid enroll token" });
+  }
+
+  const { deviceId, publicKeyPem } = req.body || {};
+  if (!deviceId || !publicKeyPem) {
+    return res.status(400).json({ error: "deviceId and publicKeyPem required" });
+  }
+
+  console.log(`[DEMO-ENROLL] DeviceID: ${deviceId} | Public Key:\n${publicKeyPem}`);
+
+  const username = payload.username;
+
+  try {
+    const pool = await poolPromise;
+    
+    // Get UserId
+    const uRes = await pool
+      .request()
+      .input("Username", sql.NVarChar(50), username)
+      .query("SELECT Id FROM dbo.Users WHERE Username = @Username");
+    
+    if (uRes.recordset.length === 0) return res.status(404).json({ error: "User not found" });
+    const userId = uRes.recordset[0].Id;
+
+    // Upsert Device (if deviceId exists for this user, update key?)
+    // Or just Insert and fail on unique constraint?
+    // Let's use MERGE or simple Check-Insert to handle "Re-enroll"
+    // "Enroll" means "New Key". If device exists, update key.
+    
+    const check = await pool.request()
+        .input("UserId", sql.Int, userId)
+        .input("DeviceId", sql.VarChar(64), deviceId)
+        .query("SELECT Id FROM dbo.UserDevices WHERE UserId=@UserId AND DeviceId=@DeviceId");
+
+    if (check.recordset.length > 0) {
+        // Update
+        await pool.request()
+            .input("UserId", sql.Int, userId)
+            .input("DeviceId", sql.VarChar(64), deviceId)
+            .input("Key", sql.NVarChar(sql.MAX), publicKeyPem)
+            .query("UPDATE dbo.UserDevices SET PublicKeyPem=@Key, LastSeenAt=SYSDATETIME() WHERE UserId=@UserId AND DeviceId=@DeviceId");
+    } else {
+        // Insert
+        await pool.request()
+            .input("UserId", sql.Int, userId)
+            .input("DeviceId", sql.VarChar(64), deviceId)
+            .input("Key", sql.NVarChar(sql.MAX), publicKeyPem)
+            .query("INSERT INTO dbo.UserDevices(UserId, DeviceId, PublicKeyPem, LastSeenAt) VALUES (@UserId, @DeviceId, @Key, SYSDATETIME())");
+    }
+
+    // Issue Real Access Token
+    const accessToken = jwt.sign({ id: userId, username }, process.env.JWT_SECRET, {
+        expiresIn: "15m", // Short lived for security demo
+    });
+
+    console.log(`[DEMO-HACKER] Access Token for ${username} (Device: ${deviceId}):`, accessToken);
+
+    return res.json({ ok: true, token: accessToken, user: { id: userId, username } });
+
+  } catch (e) {
+    console.error("Enroll Error:", e);
+    return res.status(500).json({ error: "Enroll failed", detail: e.message });
+  }
 });

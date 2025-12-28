@@ -11,8 +11,12 @@ export function buildMessagePayload({
   body,
 }) {
   // Ensure strings
+  // Ensure strings
   const cid = String(conversationId);
-  const ts = clientTimestamp ? String(clientTimestamp) : "";
+  // Match Frontend: Use getTime() (milliseconds)
+  const tsVal = new Date(clientTimestamp).getTime();
+  const ts = !isNaN(tsVal) ? String(tsVal) : ""; 
+
   const n = nonce ? String(nonce) : ""; // base64 string
   const b = String(body);
 

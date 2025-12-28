@@ -77,57 +77,69 @@ export async function importPrivateKeyPem(privateKeyPem) {
 // =====================================================
 // 🔐 PER-USER KEY STORAGE (THE IMPORTANT FIX)
 // =====================================================
-function LS_PRIV(username) {
-  return `user:${username}:private_key_pem`;
+
+// Helper: Get or Generate Device ID (UUID-like)
+export function getOrGenDeviceId() {
+  let did = localStorage.getItem("device_id");
+  if (!did) {
+    did = crypto.randomUUID();
+    localStorage.setItem("device_id", did);
+  }
+  return did;
 }
 
-function LS_PUB(username) {
-  return `user:${username}:public_key_pem`;
+function LS_PRIV(username, deviceId) {
+  return `priv:${username}:${deviceId}`;
 }
 
-/**
- * Ensure RSA keypair for ONE specific username
- * - Each username has its OWN keypair
- */
+// Ensure keypair for (username, deviceId)
 export async function ensureClientKeyPair(username) {
   if (!username) throw new Error("username is required for keypair");
 
-  const privPem = localStorage.getItem(LS_PRIV(username));
-  const pubPem = localStorage.getItem(LS_PUB(username));
+  const deviceId = getOrGenDeviceId();
+  const privKeyName = LS_PRIV(username, deviceId);
+  
+  // We don't necessarily NEED to store public key in LS for logic, but good for debug
+  // We only return privateKey object for signing
+  
+  const privPem = localStorage.getItem(privKeyName);
+  const pubPemStored = localStorage.getItem(`pub:${username}:${deviceId}`);
 
-  // ✅ Already exists
-  if (privPem && pubPem) {
-    return {
-      privateKey: await importPrivateKeyPem(privPem),
-      publicKey: await importPublicKeyPem(pubPem),
-      publicKeyPem: pubPem,
-    };
+  if (privPem && pubPemStored) {
+    try {
+      const privateKey = await importPrivateKeyPem(privPem);
+      return { privateKey, publicKeyPem: pubPemStored, deviceId };
+    } catch (e) {
+      console.warn("Invalid stored key, regenerating...", e);
+    }
   }
 
-  // ❇️ Generate new
+  // Generate new if missing either
   const { privateKey, publicKey } = await generateRsaPssKeyPair();
   const publicKeyPem = await exportPublicKeyPem(publicKey);
   const privateKeyPem = await exportPrivateKeyPem(privateKey);
 
-  localStorage.setItem(LS_PRIV(username), privateKeyPem);
-  localStorage.setItem(LS_PUB(username), publicKeyPem);
-
-  return { privateKey, publicKey, publicKeyPem };
+  localStorage.setItem(privKeyName, privateKeyPem);
+  localStorage.setItem(`pub:${username}:${deviceId}`, publicKeyPem);
+  
+  // Return everything needed for enrollment
+  return { privateKey, publicKeyPem, deviceId };
 }
 
 // ===== Admin / Debug helpers =====
 export function getUserPemFromLocalStorage(username) {
   if (!username) return { pub: "", priv: "" };
+  const deviceId = getOrGenDeviceId();
   return {
-    pub: localStorage.getItem(LS_PUB(username)) || "",
-    priv: localStorage.getItem(LS_PRIV(username)) || "",
+    pub: "(Public key not stored locally anymore, generated on enrollment)",
+    priv: localStorage.getItem(LS_PRIV(username, deviceId)) || "",
   };
 }
 
 export function clearUserKeys(username) {
   if (!username) return;
-  localStorage.removeItem(LS_PRIV(username));
-  localStorage.removeItem(LS_PUB(username));
+  const deviceId = getOrGenDeviceId();
+  localStorage.removeItem(LS_PRIV(username, deviceId));
 }
 
 // =====================================================
@@ -141,11 +153,17 @@ export function buildMessagePayload({
 }) {
   // `${conversationId}|${clientTimestamp}|${nonceBase64}|${body}`
   const cid = String(conversationId);
-  const ts = String(clientTimestamp);
+  const ts = String(clientTimestamp); // Ensure canonical via String(Number()) if backend requires, but backend said String(Number(ts)) in PROMPT, 
+  // actually prompt said: canonicalTs = String(Number(clientTimestamp)).
+  // But clientTimestamp is ISO string in previous code?
+  // Let's standardise: Client sends ISO. Backend parses ISO -> getTime().
+  // Protocol: canonical string = String(new Date(iso).getTime())
+  
+  const tsVal = new Date(clientTimestamp).getTime();
   const n = String(nonce);
   const b = String(body);
 
-  const raw = `${cid}|${ts}|${n}|${b}`;
+  const raw = `${cid}|${tsVal}|${n}|${b}`;
   return new TextEncoder().encode(raw);
 }
 
@@ -155,6 +173,7 @@ export async function sha256Bytes(bytes) {
 }
 
 export async function signHashRsaPss(privateKey, hashUint8) {
+  // We sign the raw data, SHA-256 is internal to RSA-PSS param
   const sig = await crypto.subtle.sign(
     { name: "RSA-PSS", saltLength: 32 },
     privateKey,

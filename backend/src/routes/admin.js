@@ -13,81 +13,6 @@ adminRouter.use(adminRequired);
  * GET /api/admin/users
  * Trả về danh sách users (demo)
  */
-// DELETE /api/admin/users/:id
-adminRouter.delete("/users/:id", async (req, res) => {
-  const userId = Number(req.params.id);
-  if (!Number.isInteger(userId) || userId <= 0) {
-    return res.status(400).json({ error: "Invalid user id" });
-  }
-
-  const pool = await poolPromise;
-  const tx = new sql.Transaction(pool);
-
-  try {
-    await tx.begin();
-
-    // 0) Lấy các conversation mà user đang tham gia (để dọn convo rỗng)
-    const convs = await new sql.Request(tx)
-      .input("UserId", sql.Int, userId)
-      .query(`
-        SELECT ConversationId
-        FROM dbo.ConversationMembers
-        WHERE UserId = @UserId
-      `);
-
-    // 1) Xóa messages do user gửi (FK_M_Sender)
-    await new sql.Request(tx)
-      .input("UserId", sql.Int, userId)
-      .query(`DELETE FROM dbo.Messages WHERE SenderId = @UserId`);
-
-    // 2) Xóa membership (FK_CM_User)
-    await new sql.Request(tx)
-      .input("UserId", sql.Int, userId)
-      .query(`DELETE FROM dbo.ConversationMembers WHERE UserId = @UserId`);
-
-    // 3) Dọn conversation rỗng (không còn member)
-    for (const row of convs.recordset) {
-      const cid = row.ConversationId;
-
-      const cnt = await new sql.Request(tx)
-        .input("ConversationId", sql.Int, cid)
-        .query(`
-          SELECT COUNT(*) AS Cnt
-          FROM dbo.ConversationMembers
-          WHERE ConversationId=@ConversationId
-        `);
-
-      if ((cnt.recordset?.[0]?.Cnt ?? 0) === 0) {
-        // phải xóa messages theo conversation trước (FK_M_Conv)
-        await new sql.Request(tx)
-          .input("ConversationId", sql.Int, cid)
-          .query(`DELETE FROM dbo.Messages WHERE ConversationId=@ConversationId`);
-
-        await new sql.Request(tx)
-          .input("ConversationId", sql.Int, cid)
-          .query(`DELETE FROM dbo.Conversations WHERE Id=@ConversationId`);
-      }
-    }
-
-    // 4) Cuối cùng xóa user
-    const delUser = await new sql.Request(tx)
-      .input("UserId", sql.Int, userId)
-      .query(`DELETE FROM dbo.Users WHERE Id=@UserId`);
-
-    await tx.commit();
-
-    const affected = delUser.rowsAffected?.[0] ?? 0;
-    if (affected === 0) return res.status(404).json({ error: "User not found" });
-
-    return res.json({ ok: true, deletedUserId: userId });
-  } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    console.error("ADMIN DELETE USER ERROR:", e);
-    return res.status(500).json({ error: "Server error", detail: e.message });
-  }
-});
-
-
 adminRouter.get("/users", async (req, res) => {
   const pool = await poolPromise;
 
@@ -107,10 +32,6 @@ adminRouter.get("/users", async (req, res) => {
   return res.json({ users: r.recordset });
 });
 
-/**
- * DELETE /api/admin/users/:id
- * Xóa user + dữ liệu liên quan (ConversationMembers sẽ cascade nếu FK đúng)
- */
 // DELETE /api/admin/users/:id
 adminRouter.delete("/users/:id", async (req, res) => {
   const userId = Number(req.params.id);
@@ -133,17 +54,22 @@ adminRouter.delete("/users/:id", async (req, res) => {
         WHERE UserId = @UserId
       `);
 
-    // 1) Xóa messages do user gửi (FK_M_Sender)
+    // 1) Xóa UserDevices (FK_UserDevices_Users) - NEW FIX
+    await new sql.Request(tx)
+      .input("UserId", sql.Int, userId)
+      .query(`DELETE FROM dbo.UserDevices WHERE UserId = @UserId`);
+
+    // 2) Xóa messages do user gửi (FK_M_Sender)
     await new sql.Request(tx)
       .input("UserId", sql.Int, userId)
       .query(`DELETE FROM dbo.Messages WHERE SenderId = @UserId`);
 
-    // 2) Xóa membership (FK_CM_User)
+    // 3) Xóa membership (FK_CM_User)
     await new sql.Request(tx)
       .input("UserId", sql.Int, userId)
       .query(`DELETE FROM dbo.ConversationMembers WHERE UserId = @UserId`);
 
-    // 3) Dọn conversation rỗng (không còn member)
+    // 4) Dọn conversation rỗng (không còn member)
     for (const row of convs.recordset) {
       const cid = row.ConversationId;
 
@@ -167,7 +93,7 @@ adminRouter.delete("/users/:id", async (req, res) => {
       }
     }
 
-    // 4) Cuối cùng xóa user
+    // 5) Cuối cùng xóa user
     const delUser = await new sql.Request(tx)
       .input("UserId", sql.Int, userId)
       .query(`DELETE FROM dbo.Users WHERE Id=@UserId`);

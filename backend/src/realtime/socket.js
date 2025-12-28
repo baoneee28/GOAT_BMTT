@@ -67,13 +67,14 @@ export function initSocket(io) {
     socket.on("message:send", async (msg, ack) => {
       try {
         const me = socket.user.id;
-        const { conversationId, body, clientTimestamp, signatureBase64, nonceBase64 } =
+
+        const { conversationId, body, clientTimestamp, signatureBase64, nonceBase64, deviceId } =
           msg || {};
 
         const convId = Number(conversationId);
-        // require nonceBase64
-        if (!convId || typeof body !== "string" || !signatureBase64 || !nonceBase64) {
-          return ack?.({ ok: false, error: "Invalid payload (missing nonce/sig)" });
+        // require nonceBase64 & deviceId
+        if (!convId || typeof body !== "string" || !signatureBase64 || !nonceBase64 || !deviceId) {
+          return ack?.({ ok: false, error: "Invalid payload (missing nonce/sig/deviceId)" });
         }
 
         // --- [SECURE FIX 1] Timestamp Validation (Window +/- 5 minutes) ---
@@ -103,20 +104,23 @@ export function initSocket(io) {
         if (mem.recordset.length === 0)
           return ack?.({ ok: false, error: "Not a member" });
 
-        // 2) Load public key of current authenticated user
+        // 2) Load public key of specific device
         const u = await pool
           .request()
           .input("UserId", sql.Int, me)
-          .query(`SELECT PublicKeyPem FROM dbo.Users WHERE Id=@UserId`);
+          .input("DeviceId", sql.VarChar(64), deviceId)
+          .query(`SELECT PublicKeyPem FROM dbo.UserDevices WHERE UserId=@UserId AND DeviceId=@DeviceId`);
 
         if (u.recordset.length === 0)
-          return ack?.({ ok: false, error: "Sender not found" });
+          return ack?.({ ok: false, error: "Device not enrolled or unauthorized" });
 
         // IMPORTANT: normalize PEM (DB có thể lưu \n thành \\n)
         const publicKeyPemRaw = u.recordset[0].PublicKeyPem;
         const publicKeyPem = String(publicKeyPemRaw)
           .replace(/\\n/g, "\n")
           .trim();
+
+        console.log(`[DEMO-VERIFY] Using Public Key for ${deviceId}:\n${publicKeyPem}`);
 
         // 3) Build canonical payload -> hash
         // format: `${conversationId}|${clientTimestamp}|${nonceBase64}|${body}`
@@ -148,7 +152,13 @@ export function initSocket(io) {
           `);
 
         if (dupCheck.recordset.length > 0) {
-          return ack?.({ ok: false, error: "Replay attack detected (Duplicate message/nonce)" });
+          // Check specific error to be helpful (optional) but general replay message is safer
+          // But strict requirement says: Bắt lỗi unique constraint (2601/2627) để trả “Replay detected”
+          // Here we check BEFORE insert to avoid SQL error logs if possible, but let's follow requirement:
+          // The query above is a pre-check. If we rely ONLY on DB constraints we should remove this pre-check 
+          // or keep it for optimization. The user requirement said: "Catch unique constraint error...".
+          // So I will KEEP this check for UX speed, but mostly rely on the INSERT try-catch below.
+          return ack?.({ ok: false, error: "Replay attack detected (Duplicate)" });
         }
         // ---------------------------------------------------------------
 
@@ -203,8 +213,12 @@ export function initSocket(io) {
         return ack?.({ ok: true, id: inserted.Id });
       } catch (e) {
         console.error("message:send error:", e);
+        // Requirement: Catch 2601/2627
+        if (e.number === 2601 || e.number === 2627 || e.message.includes("UNIQUE") || e.message.includes("duplicate")) {
+           return ack?.({ ok: false, error: "Replay detected" });
+        }
         return ack?.({ ok: false, error: "Server error" });
       }
-    });
+    }); // end socket.on
   });
 }
