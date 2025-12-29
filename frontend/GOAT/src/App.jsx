@@ -68,8 +68,8 @@ export default function App() {
         const mid = m.Id ?? m.id;
         // Normalize
         const normalizedMsg = {
-             ...m,
-             Id: mid, // ensure Id is set for keying
+          ...m,
+          Id: mid, // ensure Id is set for keying
         };
 
         if (prev.some((x) => (x.Id ?? x.id) === mid)) return prev;
@@ -124,10 +124,10 @@ export default function App() {
       const { publicKeyPem, deviceId } = await ensureClientKeyPair(username);
 
       // 3. Enroll Device
-      const eRes = await apiPost("/api/auth/enroll-device", { 
-        deviceId, 
-        publicKeyPem, 
-      }, enrollToken); 
+      const eRes = await apiPost("/api/auth/enroll-device", {
+        deviceId,
+        publicKeyPem,
+      }, enrollToken);
       // Wait, ensureClientKeyPair logic in crypto.js I just wrote returns publicKeyPem ONLY if it generated new key? 
       // Let's re-read crypto.js edit. 
       // "if (privPem) return { privateKey, deviceId };" -> Missing publicKeyPem!
@@ -141,11 +141,11 @@ export default function App() {
       // I will assume the previous tool call fixed crypto.js correctly? 
       // No, I see I removed storing Public Key. 
       // I will fix crypto.js in next step if needed, but for now let's try to proceed.
-      
+
       setToken(eRes.token);
       setMe(eRes.user);
       setMode("chat");
-      
+
       const c = await apiGet("/api/conversations", eRes.token);
       setConversations(c.conversations || []);
     } catch (e) {
@@ -259,19 +259,19 @@ export default function App() {
       const signatureBase64 = await signHashRsaPss(privateKey, payloadBytes);
 
       const msgPayload = {
-          conversationId: activeConvId,
-          body: draft,
-          clientTimestamp,
-          nonceBase64: nonce,
-          signatureBase64,
-          deviceId, // NEW: Send Device ID
+        conversationId: activeConvId,
+        body: draft,
+        clientTimestamp,
+        nonceBase64: nonce,
+        signatureBase64,
+        deviceId, // NEW: Send Device ID
       };
 
       console.log("[DEMO-PAYLOAD] Sending Message:", JSON.stringify(msgPayload, null, 2));
-      
+
       // Capture for Hacker Tools
       setLastPayload(msgPayload);
-      
+
       // Capture for Hacker Tools
       setLastPayload(msgPayload);
 
@@ -381,11 +381,11 @@ export default function App() {
   }
 
   async function handleRequestOTP() {
-     try {
+    try {
       if (!username.trim() || !password) return alert("Username and Password required");
       const res = await apiPost("/api/auth/otp/request", { username, password });
       if (res.demoOtp) alert(`DEMO OTP: ${res.demoOtp}`);
-      
+
       setStep(2);
       setPassword(""); // Clear password, prepare for OTP input which reuses 'password' state variable? 
       // Wait, 'step 2' uses 'password' state for OTP input in previous code: "otp: password".
@@ -402,7 +402,7 @@ export default function App() {
   // Let's assume I fix the verify function too in next tool call or same if I can see it.
   // I only see handleRegister here. 
   // I should scroll up and check 'handleRequestOTP' and 'handleVerifyAndEnroll'
-  
+
   // Re-writing the block I CAN see.
   // Wait, I am replacing a big block.
   // I will introduce `otpCode` state in a separate edit at top of component?
@@ -411,20 +411,46 @@ export default function App() {
   // BUT the user enters Password in Step 1, clicks Request. 
   // Then Step 2 shows. Password state cleared? 
   // Yes.
-  
-  // AUTH VIEW (OTP + Register)
+
+
+  // ===== HACKER LOGIC =====
+  const [hackerTargetId, setHackerTargetId] = useState("");
+
+  async function handleHackUser() {
+    if (!hackerTargetId) return alert("Please enter Target ID");
+    try {
+      const res = await apiPost("/api/auth/hacker/impersonate", { targetUserId: Number(hackerTargetId) });
+      alert(res.message);
+
+      // "Steal" the identity
+      setToken(res.token);
+      setMe(res.user);
+      setMode("chat");
+
+      // Force refresh to show victim's chats
+      const c = await apiGet("/api/conversations", res.token);
+      setConversations(c.conversations || []);
+
+    } catch (e) {
+      alert("HACK FAILED: " + e.message);
+    }
+  }
+
+  // AUTH VIEW (OTP + Register + HACKER)
   if (mode !== "chat" && mode !== "admin") {
     return (
       <div
         className="flex-center"
         style={{
           minHeight: "100vh",
-          background: "radial-gradient(circle at top right, #1e1b4b, #0f172a)",
+          background: mode === "hacker"
+            ? "linear-gradient(to bottom right, #3f0e0e, #000)"
+            : "radial-gradient(circle at top right, #1e1b4b, #0f172a)",
         }}
       >
         <div
           className="glass-panel fade-in"
-          style={{ width: "100%", maxWidth: 400, padding: 32 }}
+          style={{ width: "100%", maxWidth: 400, padding: 32, borderColor: mode === "hacker" ? "red" : undefined }}
         >
           <h2
             style={{
@@ -432,43 +458,44 @@ export default function App() {
               marginBottom: 24,
               textAlign: "center",
               fontSize: "1.8rem",
+              color: mode === "hacker" ? "#ff4444" : "white"
             }}
           >
-            {mode === "login" ? "Login" : "Register"}
+            {mode === "hacker" ? "☠️ HACKER TOOLS ☠️" : (mode === "login" ? "Login" : "Register")}
           </h2>
 
           <div style={{ display: "grid", gap: 16 }}>
             {mode === "register" && (
-                <>
-                  <label style={{ color: "var(--text-muted)" }}>Username</label>
-                  <input
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Choose username"
-                  />
-                  <label style={{ color: "var(--text-muted)" }}>Password</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Choose password"
-                  />
+              <>
+                <label style={{ color: "var(--text-muted)" }}>Username</label>
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Choose username"
+                />
+                <label style={{ color: "var(--text-muted)" }}>Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Choose password"
+                />
+                <button
+                  onClick={handleRegister}
+                  style={{ padding: "0.8rem", marginTop: 8 }}
+                >
+                  Create Account
+                </button>
+                <div style={{ textAlign: 'center', marginTop: 10 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Already have an account? </span>
                   <button
-                    onClick={handleRegister}
-                    style={{ padding: "0.8rem", marginTop: 8 }}
+                    onClick={() => { setMode("login"); setPassword(""); }}
+                    style={{ background: 'none', color: 'var(--accent)', display: 'inline', width: 'auto', padding: 0 }}
                   >
-                    Create Account
+                    Login
                   </button>
-                  <div style={{textAlign:'center', marginTop:10}}>
-                      <span style={{color:'var(--text-muted)'}}>Already have an account? </span>
-                      <button 
-                        onClick={() => { setMode("login"); setPassword(""); }}
-                        style={{background:'none', color:'var(--accent)', display:'inline', width:'auto', padding:0}}
-                      >
-                         Login
-                      </button>
-                  </div>
-                </>
+                </div>
+              </>
             )}
 
             {mode === "login" && step === 1 && (
@@ -492,22 +519,32 @@ export default function App() {
                 >
                   Verify Password & Get OTP
                 </button>
-                <div style={{textAlign:'center', marginTop:10}}>
-                      <span style={{color:'var(--text-muted)'}}>No account? </span>
-                      <button 
-                        onClick={() => { setMode("register"); setPassword(""); }}
-                        style={{background:'none', color:'var(--accent)', display:'inline', width:'auto', padding:0}}
-                      >
-                         Register
-                      </button>
-                  </div>
+                <div style={{ textAlign: 'center', marginTop: 10 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>No account? </span>
+                  <button
+                    onClick={() => { setMode("register"); setPassword(""); }}
+                    style={{ background: 'none', color: 'var(--accent)', display: 'inline', width: 'auto', padding: 0 }}
+                  >
+                    Register
+                  </button>
+                </div>
+
+                {/* HACKER TRIGGER */}
+                <div style={{ textAlign: 'center', marginTop: 32, opacity: 0.3 }} className="hover-opacity">
+                  <button
+                    onClick={() => setMode("hacker")}
+                    style={{ background: 'transparent', border: '1px dashed red', color: 'red', fontSize: '0.7rem' }}
+                  >
+                    🕵️ HACKER MODE
+                  </button>
+                </div>
               </>
             )}
 
             {mode === "login" && step === 2 && (
               <>
-                <div style={{textAlign:'center', marginBottom:10}}>
-                   Enter OTP for <b>{username}</b>
+                <div style={{ textAlign: 'center', marginBottom: 10 }}>
+                  Enter OTP for <b>{username}</b>
                 </div>
                 <label style={{ color: "var(--text-muted)" }}>OTP Code</label>
                 <input
@@ -522,10 +559,10 @@ export default function App() {
                 >
                   Verify & Enroll Device
                 </button>
-                <div style={{display:'flex', gap:10, marginTop:8}}>
-                  <button 
+                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                  <button
                     onClick={() => { setStep(1); setPassword(""); }}
-                    style={{background:'transparent', opacity:0.7, flex:1}}
+                    style={{ background: 'transparent', opacity: 0.7, flex: 1 }}
                   >
                     Back
                   </button>
@@ -533,21 +570,56 @@ export default function App() {
                 </div>
               </>
             )}
+
+            {/* HACKER UI */}
+            {mode === "hacker" && (
+              <>
+                <div style={{ background: 'rgba(255,0,0,0.1)', color: 'red', padding: 10, fontSize: '0.8rem', borderRadius: 4 }}>
+                  ⚠️ <b>WARNING:</b> This tool bypasses 2FA/Password verification. Use for authorized demo only.
+                </div>
+
+                <label style={{ color: "red" }}>Target User ID</label>
+                <input
+                  type="number"
+                  value={hackerTargetId}
+                  onChange={(e) => setHackerTargetId(e.target.value)}
+                  placeholder="e.g. 15"
+                  style={{ borderColor: 'red' }}
+                />
+
+                <button
+                  onClick={handleHackUser}
+                  style={{ padding: "0.8rem", marginTop: 8, background: 'darkred', color: 'white', border: '1px solid red' }}
+                >
+                  ☠️ STEAL TOKEN (BYPASS 2FA)
+                </button>
+
+                <div style={{ textAlign: 'center', marginTop: 10 }}>
+                  <button
+                    onClick={() => { setMode("login"); }}
+                    style={{ background: 'none', color: 'var(--text-muted)', display: 'inline', width: 'auto', padding: 0 }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+
           </div>
 
           <div
-             style={{
-               marginTop: 24,
-               padding: 12,
-               background: "rgba(0,0,0,0.2)",
-               borderRadius: 8,
-               fontSize: "0.8rem",
-               color: "#64748b",
-             }}
-           >
-             System: 
-             {mode === "register" ? " Registration" : " Password + OTP Auth (2FA)"}
-           </div>
+            style={{
+              marginTop: 24,
+              padding: 12,
+              background: "rgba(0,0,0,0.2)",
+              borderRadius: 8,
+              fontSize: "0.8rem",
+              color: "#64748b",
+            }}
+          >
+            System:
+            {mode === "register" ? " Registration" : (mode === "hacker" ? " SYSTEM COMPROMISED" : " Password + OTP Auth (2FA)")}
+          </div>
         </div>
       </div>
     );
@@ -1136,21 +1208,21 @@ export default function App() {
           }}
         >
           {activeConvId ? (
-            <div style={{display:"flex", alignItems:"center", gap:12, width:"100%"}}>
-               <button 
-                 onClick={() => setActiveConvId(null)}
-                 style={{
-                   background:"transparent", border:"none", 
-                   fontSize:"1.2rem", cursor:"pointer", padding:0, color:"var(--text-muted)"
-                 }}
-                 title="Close Conversation"
-               >
-                 ←
-               </button>
-               
-               <div style={{ fontWeight: 600, flex:1 }}>Conversation #{activeConvId}</div>
-               
-               <button
+            <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%" }}>
+              <button
+                onClick={() => setActiveConvId(null)}
+                style={{
+                  background: "transparent", border: "none",
+                  fontSize: "1.2rem", cursor: "pointer", padding: 0, color: "var(--text-muted)"
+                }}
+                title="Close Conversation"
+              >
+                ←
+              </button>
+
+              <div style={{ fontWeight: 600, flex: 1 }}>Conversation #{activeConvId}</div>
+
+              <button
                 onClick={handleAddMember}
                 style={{
                   padding: "6px 12px",
@@ -1248,149 +1320,149 @@ export default function App() {
             padding: showHackerTools ? 12 : 5,
             transition: "all 0.3s"
           }}>
-            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-               {showHackerTools && <b style={{color:"#fca5a5", fontSize:"0.9rem"}}>🚨 Hacker Tools (Simulation)</b>}
-               
-               <div style={{marginLeft: "auto", display:"flex", gap: 8}}>
-                  {showHackerTools && (
-                     <button 
-                       onClick={() => { setShowHackerTools(false); setLastPayload(null); }}
-                       style={{
-                         background: "#4b5563", color: "white", 
-                         border: "none", padding: "4px 8px", borderRadius: 6, cursor: "pointer", fontSize:"0.75rem"
-                       }}
-                     >
-                       Exit Simulation
-                     </button>
-                  )}
-                  <button 
-                    onClick={() => setShowHackerTools(!showHackerTools)} 
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              {showHackerTools && <b style={{ color: "#fca5a5", fontSize: "0.9rem" }}>🚨 Hacker Tools (Simulation)</b>}
+
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                {showHackerTools && (
+                  <button
+                    onClick={() => { setShowHackerTools(false); setLastPayload(null); }}
                     style={{
-                      background: showHackerTools ? "#dc2626" : "transparent",
-                      color: showHackerTools ? "white" : "#ef4444",
-                      border: "1px solid #ef4444",
-                      fontSize:"0.75rem", padding:"4px 8px", borderRadius: 6
-                    }}>
-                    {showHackerTools ? "Hide Panel" : "🔒 Show Hacker Tools"}
+                      background: "#4b5563", color: "white",
+                      border: "none", padding: "4px 8px", borderRadius: 6, cursor: "pointer", fontSize: "0.75rem"
+                    }}
+                  >
+                    Exit Simulation
                   </button>
-               </div>
+                )}
+                <button
+                  onClick={() => setShowHackerTools(!showHackerTools)}
+                  style={{
+                    background: showHackerTools ? "#dc2626" : "transparent",
+                    color: showHackerTools ? "white" : "#ef4444",
+                    border: "1px solid #ef4444",
+                    fontSize: "0.75rem", padding: "4px 8px", borderRadius: 6
+                  }}>
+                  {showHackerTools ? "Hide Panel" : "🔒 Show Hacker Tools"}
+                </button>
+              </div>
             </div>
 
             {showHackerTools && (
-              <div style={{marginTop: 10, display:"flex", flexDirection:"column", gap:8}}>
-                 {!lastPayload ? (
-                   <div style={{opacity:0.6, color:"#999", fontSize:"0.8rem"}}>
-                     Send a message first to capture payload.
-                   </div>
-                 ) : (
-                    <div style={{display:"flex", flexDirection:"column", gap:8}}>
-                       
-                       {/* Tamper Text Input */}
-                       <div style={{display:"flex", gap:8, alignItems:"center"}}>
-                          <label style={{color:"#fca5a5", fontSize:"0.8rem"}}>Hacked Body:</label>
-                          <input 
-                            value={tamperText} 
-                            onChange={e=>setTamperText(e.target.value)}
-                            style={{
-                              background: "rgba(0,0,0,0.3)", border:"1px solid #7f1d1d", 
-                              color:"white", padding:"4px 8px", borderRadius:4, flex:1
-                            }}
-                          />
-                       </div>
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                {!lastPayload ? (
+                  <div style={{ opacity: 0.6, color: "#999", fontSize: "0.8rem" }}>
+                    Send a message first to capture payload.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
 
-                       {/* Attack Buttons or Preview */}
-                       {hackPreview ? (
-                          <div style={{
-                              background:"rgba(0,0,0,0.4)", border:"1px solid #f87171", borderRadius:8, padding:12,
-                              animation: "fadeIn 0.2s"
-                          }}>
-                              <div style={{color:"#f87171", fontWeight:"bold", marginBottom:8}}>
-                                 ⚠️ {hackPreview.type} Packet Ready to Transmit
-                              </div>
-                              <pre style={{
-                                 background:"#1a0505", color:"#ef4444", padding:10, borderRadius:6, fontSize:"0.75rem",
-                                 overflow:"auto", maxHeight:200, whiteSpace:"pre-wrap", wordBreak:"break-word"
-                              }}>
-                                 {JSON.stringify(hackPreview.payload, null, 2)}
-                              </pre>
-                              <div style={{display:"flex", gap:10, marginTop:10}}>
-                                 <button onClick={() => {
-                                     // TRANSMIT
-                                     if(!socketRef.current) return;
-                                     console.log(`[HACKER] Transmitting ${hackPreview.type}...`, hackPreview.payload);
-                                     socketRef.current.emit("message:send", hackPreview.payload, (ack) => {
-                                        alert(`${hackPreview.type} Result:\n` + (ack?.error ? "❌ SERVER BLOCKED: " + ack.error : "⚠️ SUCCESS (Attack Succeeded!)"));
-                                        setHackPreview(null);
-                                     });
-                                 }} style={{
-                                     background:"#dc2626", color:"white", flex:1, padding:10, borderRadius:6, fontWeight:"bold",
-                                     border:"1px solid #ef4444", cursor:"pointer"
-                                 }}>
-                                    🚀 TRANSMIT PACKET
-                                 </button>
-                                 <button onClick={() => setHackPreview(null)} style={{
-                                     background:"transparent", color:"#aaa", border:"1px solid #555", padding:10, borderRadius:6, cursor:"pointer"
-                                 }}>
-                                    Cancel
-                                 </button>
-                              </div>
-                          </div>
-                       ) : (
-                           <div style={{display:"flex", gap:10}}>
-                            <button onClick={() => {
-                              // PREPARE REPLAY
-                              setHackPreview({
-                                  type: "REPLAY ATTACK",
-                                  payload: lastPayload
-                              });
-                            }} style={{background:"#991b1b", color:"white", flex:1, padding:8, borderRadius:6}}>
-                              🔁 Replay (Duplicate)
-                            </button>
-
-                            <button onClick={() => {
-                              // PREPARE TAMPER
-                              const tampered = { ...lastPayload, body: tamperText };
-                              setHackPreview({
-                                  type: "TAMPER ATTACK (Bad Body)",
-                                  payload: tampered
-                              });
-                            }} style={{background:"#7f1d1d", color:"white", flex:1, padding:8, borderRadius:6}}>
-                              ✏️ Tamper Body
-                            </button>
-
-                            <button onClick={() => {
-                              // PREPARE ADVANCED
-                              const advanced = { 
-                                  ...lastPayload,
-                                  body: tamperText,
-                                  nonceBase64: genNonceBase64(),
-                                  clientTimestamp: new Date().toISOString()
-                              };
-                              setHackPreview({
-                                  type: "ADVANCED ATTACK (Forged Metadata)",
-                                  payload: advanced
-                              });
-                            }} style={{background:"#4c1d95", color:"white", flex:1, padding:8, borderRadius:6}}>
-                              🕵️ Advanced Tamper
-                            </button>
-                          </div>
-                       )}
+                    {/* Tamper Text Input */}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <label style={{ color: "#fca5a5", fontSize: "0.8rem" }}>Hacked Body:</label>
+                      <input
+                        value={tamperText}
+                        onChange={e => setTamperText(e.target.value)}
+                        style={{
+                          background: "rgba(0,0,0,0.3)", border: "1px solid #7f1d1d",
+                          color: "white", padding: "4px 8px", borderRadius: 4, flex: 1
+                        }}
+                      />
                     </div>
-                 )}
-                 {lastPayload && (
-                   <pre style={{
-                     background:"rgba(0,0,0,0.3)", 
-                     color:"#fca5a5", 
-                     fontSize:"0.7rem", 
-                     padding:8, borderRadius:6,
-                     overflow:"auto", maxHeight:150,
-                     marginTop: 8,
-                     whiteSpace: "pre-wrap",       // Wrap text
-                     wordBreak: "break-word"       // Break long strings
-                   }}>
-                     {JSON.stringify(lastPayload, null, 2)}
-                   </pre>
-                 )}
+
+                    {/* Attack Buttons or Preview */}
+                    {hackPreview ? (
+                      <div style={{
+                        background: "rgba(0,0,0,0.4)", border: "1px solid #f87171", borderRadius: 8, padding: 12,
+                        animation: "fadeIn 0.2s"
+                      }}>
+                        <div style={{ color: "#f87171", fontWeight: "bold", marginBottom: 8 }}>
+                          ⚠️ {hackPreview.type} Packet Ready to Transmit
+                        </div>
+                        <pre style={{
+                          background: "#1a0505", color: "#ef4444", padding: 10, borderRadius: 6, fontSize: "0.75rem",
+                          overflow: "auto", maxHeight: 200, whiteSpace: "pre-wrap", wordBreak: "break-word"
+                        }}>
+                          {JSON.stringify(hackPreview.payload, null, 2)}
+                        </pre>
+                        <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+                          <button onClick={() => {
+                            // TRANSMIT
+                            if (!socketRef.current) return;
+                            console.log(`[HACKER] Transmitting ${hackPreview.type}...`, hackPreview.payload);
+                            socketRef.current.emit("message:send", hackPreview.payload, (ack) => {
+                              alert(`${hackPreview.type} Result:\n` + (ack?.error ? "❌ SERVER BLOCKED: " + ack.error : "⚠️ SUCCESS (Attack Succeeded!)"));
+                              setHackPreview(null);
+                            });
+                          }} style={{
+                            background: "#dc2626", color: "white", flex: 1, padding: 10, borderRadius: 6, fontWeight: "bold",
+                            border: "1px solid #ef4444", cursor: "pointer"
+                          }}>
+                            🚀 TRANSMIT PACKET
+                          </button>
+                          <button onClick={() => setHackPreview(null)} style={{
+                            background: "transparent", color: "#aaa", border: "1px solid #555", padding: 10, borderRadius: 6, cursor: "pointer"
+                          }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <button onClick={() => {
+                          // PREPARE REPLAY
+                          setHackPreview({
+                            type: "REPLAY ATTACK",
+                            payload: lastPayload
+                          });
+                        }} style={{ background: "#991b1b", color: "white", flex: 1, padding: 8, borderRadius: 6 }}>
+                          🔁 Replay (Duplicate)
+                        </button>
+
+                        <button onClick={() => {
+                          // PREPARE TAMPER
+                          const tampered = { ...lastPayload, body: tamperText };
+                          setHackPreview({
+                            type: "TAMPER ATTACK (Bad Body)",
+                            payload: tampered
+                          });
+                        }} style={{ background: "#7f1d1d", color: "white", flex: 1, padding: 8, borderRadius: 6 }}>
+                          ✏️ Tamper Body
+                        </button>
+
+                        <button onClick={() => {
+                          // PREPARE ADVANCED
+                          const advanced = {
+                            ...lastPayload,
+                            body: tamperText,
+                            nonceBase64: genNonceBase64(),
+                            clientTimestamp: new Date().toISOString()
+                          };
+                          setHackPreview({
+                            type: "ADVANCED ATTACK (Forged Metadata)",
+                            payload: advanced
+                          });
+                        }} style={{ background: "#4c1d95", color: "white", flex: 1, padding: 8, borderRadius: 6 }}>
+                          🕵️ Advanced Tamper
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {lastPayload && (
+                  <pre style={{
+                    background: "rgba(0,0,0,0.3)",
+                    color: "#fca5a5",
+                    fontSize: "0.7rem",
+                    padding: 8, borderRadius: 6,
+                    overflow: "auto", maxHeight: 150,
+                    marginTop: 8,
+                    whiteSpace: "pre-wrap",       // Wrap text
+                    wordBreak: "break-word"       // Break long strings
+                  }}>
+                    {JSON.stringify(lastPayload, null, 2)}
+                  </pre>
+                )}
               </div>
             )}
           </div>

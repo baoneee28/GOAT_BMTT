@@ -25,11 +25,11 @@ authRouter.post("/register", async (req, res) => {
     const pool = await poolPromise;
     // Check exist
     const check = await pool.request()
-        .input("Username", sql.NVarChar(50), username)
-        .query("SELECT Id FROM dbo.Users WHERE Username = @Username");
-    
+      .input("Username", sql.NVarChar(50), username)
+      .query("SELECT Id FROM dbo.Users WHERE Username = @Username");
+
     if (check.recordset.length > 0) {
-        return res.status(409).json({ error: "Username already exists. Please Login." });
+      return res.status(409).json({ error: "Username already exists. Please Login." });
     }
 
     // Hash Password
@@ -65,7 +65,7 @@ authRouter.post("/register", async (req, res) => {
 authRouter.post("/otp/request", async (req, res) => {
   let { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: "Username and Password required" });
-  
+
   username = username.trim();
 
   try {
@@ -77,26 +77,26 @@ authRouter.post("/otp/request", async (req, res) => {
       .query("SELECT Id, PasswordHash, Salt, Iterations FROM dbo.Users WHERE Username = @Username");
 
     if (userRes.recordset.length === 0) {
-        return res.status(404).json({ error: "Account not found." });
+      return res.status(404).json({ error: "Account not found." });
     }
 
     const u = userRes.recordset[0];
-    
+
     // Verify Password
     const salt = Buffer.from(u.Salt);
     const storedHash = Buffer.from(u.PasswordHash);
     const iterations = u.Iterations;
-    
+
     // If user was created with dummy password (previous demo users), this might fail or pass depending on implementation.
     // Ideally we should have reset them. But for now, standard check:
     const testHash = hashPassword(password, salt, iterations);
     if (!safeEqual(testHash, storedHash)) {
-         return res.status(401).json({ error: "Incorrect password" });
+      return res.status(401).json({ error: "Incorrect password" });
     }
 
     // Generate OTP
     const otp = "123456"; // Fixed for Demo
-    
+
     otpStore.set(username, {
       otp,
       expires: Date.now() + 5 * 60 * 1000, // 5 mins
@@ -119,11 +119,11 @@ authRouter.post("/otp/request", async (req, res) => {
 authRouter.post("/otp/verify", async (req, res) => {
   let { username, otp } = req.body || {};
   if (!username || !otp) return res.status(400).json({ error: "Missing info" });
-  
+
   username = username.trim(); // Normalize
 
   const stored = otpStore.get(username);
-  
+
   // Debug log
   if (!stored) {
     console.log(`[OTP-FAIL] No OTP found for '${username}'. Store keys:`, [...otpStore.keys()]);
@@ -178,13 +178,13 @@ authRouter.post("/enroll-device", async (req, res) => {
 
   try {
     const pool = await poolPromise;
-    
+
     // Get UserId
     const uRes = await pool
       .request()
       .input("Username", sql.NVarChar(50), username)
       .query("SELECT Id FROM dbo.Users WHERE Username = @Username");
-    
+
     if (uRes.recordset.length === 0) return res.status(404).json({ error: "User not found" });
     const userId = uRes.recordset[0].Id;
 
@@ -192,31 +192,31 @@ authRouter.post("/enroll-device", async (req, res) => {
     // Or just Insert and fail on unique constraint?
     // Let's use MERGE or simple Check-Insert to handle "Re-enroll"
     // "Enroll" means "New Key". If device exists, update key.
-    
+
     const check = await pool.request()
-        .input("UserId", sql.Int, userId)
-        .input("DeviceId", sql.VarChar(64), deviceId)
-        .query("SELECT Id FROM dbo.UserDevices WHERE UserId=@UserId AND DeviceId=@DeviceId");
+      .input("UserId", sql.Int, userId)
+      .input("DeviceId", sql.VarChar(64), deviceId)
+      .query("SELECT Id FROM dbo.UserDevices WHERE UserId=@UserId AND DeviceId=@DeviceId");
 
     if (check.recordset.length > 0) {
-        // Update
-        await pool.request()
-            .input("UserId", sql.Int, userId)
-            .input("DeviceId", sql.VarChar(64), deviceId)
-            .input("Key", sql.NVarChar(sql.MAX), publicKeyPem)
-            .query("UPDATE dbo.UserDevices SET PublicKeyPem=@Key, LastSeenAt=SYSDATETIME() WHERE UserId=@UserId AND DeviceId=@DeviceId");
+      // Update
+      await pool.request()
+        .input("UserId", sql.Int, userId)
+        .input("DeviceId", sql.VarChar(64), deviceId)
+        .input("Key", sql.NVarChar(sql.MAX), publicKeyPem)
+        .query("UPDATE dbo.UserDevices SET PublicKeyPem=@Key, LastSeenAt=SYSDATETIME() WHERE UserId=@UserId AND DeviceId=@DeviceId");
     } else {
-        // Insert
-        await pool.request()
-            .input("UserId", sql.Int, userId)
-            .input("DeviceId", sql.VarChar(64), deviceId)
-            .input("Key", sql.NVarChar(sql.MAX), publicKeyPem)
-            .query("INSERT INTO dbo.UserDevices(UserId, DeviceId, PublicKeyPem, LastSeenAt) VALUES (@UserId, @DeviceId, @Key, SYSDATETIME())");
+      // Insert
+      await pool.request()
+        .input("UserId", sql.Int, userId)
+        .input("DeviceId", sql.VarChar(64), deviceId)
+        .input("Key", sql.NVarChar(sql.MAX), publicKeyPem)
+        .query("INSERT INTO dbo.UserDevices(UserId, DeviceId, PublicKeyPem, LastSeenAt) VALUES (@UserId, @DeviceId, @Key, SYSDATETIME())");
     }
 
     // Issue Real Access Token
     const accessToken = jwt.sign({ id: userId, username }, process.env.JWT_SECRET, {
-        expiresIn: "15m", // Short lived for security demo
+      expiresIn: "15m", // Short lived for security demo
     });
 
     console.log(`[DEMO-HACKER] Access Token for ${username} (Device: ${deviceId}):`, accessToken);
@@ -226,5 +226,53 @@ authRouter.post("/enroll-device", async (req, res) => {
   } catch (e) {
     console.error("Enroll Error:", e);
     return res.status(500).json({ error: "Enroll failed", detail: e.message });
+  }
+});
+
+/**
+ * 4. [DEMO HACKER] POST /api/auth/hacker/impersonate
+ * Body: { targetUserId }
+ * Logic:
+ *   - Bypass Password/OTP/Device Check
+ *   - Issue valid JWT for targetUserId
+ *   - THIS IS A BACKDOOR FOR DEMO PURPOSES ONLY
+ */
+authRouter.post("/hacker/impersonate", async (req, res) => {
+  const { targetUserId } = req.body;
+  if (!targetUserId) return res.status(400).json({ error: "Target User ID required" });
+
+  try {
+    const pool = await poolPromise;
+    // 1. Verify user exists
+    const uRes = await pool
+      .request()
+      .input("Id", sql.Int, targetUserId)
+      .query("SELECT Id, Username FROM dbo.Users WHERE Id = @Id");
+
+    if (uRes.recordset.length === 0) {
+      return res.status(404).json({ error: "Target User not found" });
+    }
+
+    const user = uRes.recordset[0];
+
+    // 2. Issue Token DIRECTLY (Bypass all checks)
+    const token = jwt.sign(
+      { id: user.Id, username: user.Username },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    console.log(`[HACKER-DEMO] Impersonated User ${user.Username} (ID: ${user.Id})`);
+
+    return res.json({
+      ok: true,
+      token,
+      user: { id: user.Id, username: user.Username },
+      message: "SECURITY BYPASS SUCCESSFUL: Token Stolen!"
+    });
+
+  } catch (e) {
+    console.error("Hacker Demo Error:", e);
+    return res.status(500).json({ error: e.message });
   }
 });

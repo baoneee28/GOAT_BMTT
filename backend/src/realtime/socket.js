@@ -85,7 +85,10 @@ export function initSocket(io) {
 
         const now = Date.now();
         const driftMs = Math.abs(now - ts.getTime());
+        console.log(`[DEBUG] Timestamp Check: Client=${clientTimestamp}, ServerNow=${now}, Drift=${driftMs}ms`);
+
         if (driftMs > 5 * 60 * 1000) {
+          console.log("[DEBUG] Blocked: Timestamp out of allowed window");
           return ack?.({ ok: false, error: "Timestamp out of allowed window" });
         }
         // ------------------------------------------------------------------
@@ -152,6 +155,7 @@ export function initSocket(io) {
           `);
 
         if (dupCheck.recordset.length > 0) {
+          console.log("[DEBUG] Blocked: Replay attack detected (Duplicate Nonce/Hash)");
           // Check specific error to be helpful (optional) but general replay message is safer
           // But strict requirement says: Bắt lỗi unique constraint (2601/2627) để trả “Replay detected”
           // Here we check BEFORE insert to avoid SQL error logs if possible, but let's follow requirement:
@@ -177,7 +181,12 @@ export function initSocket(io) {
           sig
         );
 
-        if (!ok) return ack?.({ ok: false, error: "Signature verify failed" });
+        if (ok) {
+          console.log("signature ok");
+        } else {
+          console.log("không hợp lệ");
+          return ack?.({ ok: false, error: "Signature verify failed" });
+        }
 
         // 5) Save DB (senderId must be me)
         const saved = await pool
@@ -215,7 +224,7 @@ export function initSocket(io) {
         console.error("message:send error:", e);
         // Requirement: Catch 2601/2627
         if (e.number === 2601 || e.number === 2627 || e.message.includes("UNIQUE") || e.message.includes("duplicate")) {
-           return ack?.({ ok: false, error: "Replay detected" });
+          return ack?.({ ok: false, error: "Replay detected" });
         }
         return ack?.({ ok: false, error: "Server error" });
       }
